@@ -56,6 +56,6 @@ func init() {
 	startCmd.Flags().StringSliceVarP(&runArgs.Ignore, "ignore", "i", nil, "path(s) for the indexer to ignore")
 	startCmd.Flags().StringVarP(&runArgs.IgnoreFile, "ignore-file", "I", "", "path to file containing list of paths to be ignored by the indexer")
 	startCmd.Flags().StringVarP(&runArgs.WatchFile, "watch-file", "W", "", "path to file containing list of paths to be watched by the indexer")
-	rootCmd.AddCommand(startCmd)
+	// rootCmd.AddCommand(startCmd)
 	rootCmd.AddCommand(serveCmd)
 }

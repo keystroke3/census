@@ -12,6 +12,8 @@ type Command struct {
 	Vgrep       string
 	Vsensitive  string
 	StopServer  bool
+	EscapeChars string
+	Quote       bool
 }
 
 type RunArgs struct {

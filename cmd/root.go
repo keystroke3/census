@@ -38,8 +38,7 @@ var rootCmd = &cobra.Command{
 	Use:   "census",
 	Short: "A tool to index, search through and find your files",
 	Long: `Cencus takes census (get it?) of files in a specified directory or
-group of directories. All the files can be indexed in real time or on demand when the
-tool is called on a particular directory.`,
+group of directories.`,
 	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if !cmd.Flags().Changed("paths") || len(cliArgs.Paths) == 0 {
@@ -87,6 +86,8 @@ func init() {
 	rootCmd.Flags().StringSliceVarP(&cliArgs.Paths, "paths", "p", nil, "path(s) to search through")
 	rootCmd.Flags().StringSliceVarP(&cliArgs.IgnorePaths, "ignore", "i", nil, "comma separated paths to ignore when searching. can be passed multiple times")
 	rootCmd.Flags().BoolVarP(&cliArgs.ShowHidden, "hidden", "H", false, "whether to include hidden (dot) paths and files in search")
+	rootCmd.Flags().StringVarP(&cliArgs.EscapeChars, "escape", "e", "", "characters to prepend with a backslash to escape them")
+	rootCmd.Flags().BoolVarP(&cliArgs.Quote, "quote", "q", false, "whether wrap each line in double quotes")
 	rootCmd.Flags().BoolVarP(&cliArgs.DirMode, "dir", "d", false, "return directories only")
 	rootCmd.Flags().IntVarP(&cliArgs.Depth, "depth", "D", -1, "How many nested directories to index")
 	rootCmd.Flags().StringVarP(&cliArgs.Grep, "grep", "g", "", "show path files matches that match regex pattern")

@@ -38,7 +38,7 @@ func Query(args *types.Command) (string, error) {
 		}
 	}
 
-	memIndex := NewMemIndex(args.Paths, args.IgnorePaths, args.ShowHidden, args.Depth)
+	memIndex := NewMemIndex(args.Paths, args.IgnorePaths, args.ShowHidden, args.Depth, args.EscapeChars, args.Quote)
 	Walk(args.Paths, &memIndex.Root, &memIndex.Current, memIndex.Add)
 
 	var allPaths []string
@@ -91,26 +91,36 @@ func mimeFromExt(s string, m map[string]string) string {
 	return m[parts[len(parts)-1]]
 }
 
-func NewMemIndex(paths []string, ignore []string, showHidden bool, depth int) *MemIndex {
-	return &MemIndex{
-		Files:      make(map[string]*File),
-		Dirs:       make(map[string]bool),
-		paths:      paths,
-		ignore:     ignore,
-		showHidden: showHidden,
-		depth:      depth,
+func NewMemIndex(paths []string, ignore []string, showHidden bool, depth int, escapeChars string, quote bool) *MemIndex {
+	index := &MemIndex{
+		Files:          make(map[string]*File),
+		Dirs:           make(map[string]bool),
+		paths:          paths,
+		ignore:         ignore,
+		showHidden:     showHidden,
+		depth:          depth,
+		escapeChars:    escapeChars,
+		quote:          quote,
+		escapeCharsMap: make(map[rune]bool),
 	}
+	for _, c := range escapeChars {
+		index.escapeCharsMap[c] = true
+	}
+	return index
 }
 
 type MemIndex struct {
-	Files      map[string]*File
-	Dirs       map[string]bool
-	Current    string
-	Root       string
-	paths      []string
-	ignore     []string
-	showHidden bool
-	depth      int
+	Files          map[string]*File
+	Dirs           map[string]bool
+	Current        string
+	Root           string
+	paths          []string
+	ignore         []string
+	showHidden     bool
+	depth          int
+	quote          bool
+	escapeChars    string
+	escapeCharsMap map[rune]bool
 }
 
 // Adds a new `File` entry to the index
@@ -183,18 +193,30 @@ func (i *MemIndex) Move(from string, to string) error {
 	return nil
 }
 
+func (i *MemIndex) escapeAndQuote(line string) string {
+	newLine := ""
+	if len(i.escapeCharsMap) > 0 {
+		for _, c := range line {
+			if i.escapeCharsMap[c] {
+				newLine = fmt.Sprintf("%s\\%c", newLine, c)
+			} else {
+				newLine = fmt.Sprintf("%s%c", newLine, c)
+			}
+		}
+	} else {
+		newLine = line
+	}
+	if i.quote {
+		// use this syntax instead of "%q" to prevent double escaping of spaces
+		return fmt.Sprintf("\"%s\"", newLine)
+	}
+	return newLine
+}
+
 func (i *MemIndex) GetFiles() []string {
 	paths := []string{}
 	for _, p := range i.Files {
-		paths = append(paths, p.Name)
-	}
-	return paths
-}
-
-func (i *MemIndex) GetFilesQuoted() []string {
-	paths := []string{}
-	for _, p := range i.Files {
-		paths = append(paths, fmt.Sprintf("%q", p.Name))
+		paths = append(paths, i.escapeAndQuote(p.Name))
 	}
 	return paths
 }
@@ -202,23 +224,7 @@ func (i *MemIndex) GetFilesQuoted() []string {
 func (i *MemIndex) GetDirs() []string {
 	dirs := []string{}
 	for p := range i.Dirs {
-		dirs = append(dirs, p)
-	}
-	return dirs
-}
-
-func (i *MemIndex) GetDirsQuoted() []string {
-	dirs := []string{}
-	for p := range i.Dirs {
-		dirs = append(dirs, fmt.Sprintf("%q", p))
-	}
-	return dirs
-}
-
-func (i *MemIndex) GetDirsEscaped() []string {
-	dirs := []string{}
-	for p := range i.Dirs {
-		dirs = append(dirs, fmt.Sprintf("%q", p))
+		dirs = append(dirs, i.escapeAndQuote(p))
 	}
 	return dirs
 }
