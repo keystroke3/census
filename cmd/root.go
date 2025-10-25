@@ -19,18 +19,26 @@ import (
 
 var cliArgs *types.Command
 
+func remotizePath(path string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("unable to determine local home directory")
+	}
+	if strings.HasPrefix(path, home) {
+		return strings.Replace(path, home, "~", 1), nil
+	} else {
+		return path, nil
+	}
+}
+
 func remotizeHomePaths(paths []string) ([]string, error) {
 	clean_paths := []string{}
 	for _, path := range paths {
-		home, err := os.UserHomeDir()
+		p, err := remotizePath(path)
 		if err != nil {
-			return nil, fmt.Errorf("unable to determine local home directory")
+			return nil, err
 		}
-		if strings.HasPrefix(path, home) {
-			clean_paths = append(clean_paths, strings.Replace(path, home, "~", 1))
-		} else {
-			clean_paths = append(clean_paths, path)
-		}
+		clean_paths = append(clean_paths, p)
 	}
 	return clean_paths, nil
 }
@@ -67,7 +75,6 @@ group of directories.`,
 	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		pipePaths := readPipedPaths()
-		fmt.Printf("paths: %s\n", pipePaths)
 		if pipePaths != nil {
 			cliArgs.Paths = pipePaths
 		}
@@ -89,6 +96,13 @@ group of directories.`,
 			if err != nil {
 				fmt.Println("error translating paths", err)
 				return
+			}
+			if cmd.Flags().Changed("trim") && cliArgs.Trim != "" {
+				p, err := remotizePath(cliArgs.Trim)
+				if err != nil {
+					fmt.Println("error parsing trim prefix", err)
+				}
+				cliArgs.Trim = p
 			}
 			cliArgs.Paths = net_paths
 			results := socket.RemoteQuery(cliArgs)
@@ -123,6 +137,7 @@ func init() {
 	rootCmd.Flags().StringVarP(&cliArgs.Vgrep, "vgrep", "v", "", "excludes paths match that match regex pattern")
 	rootCmd.Flags().StringVarP(&cliArgs.Gsensitive, "grep-case", "G", "", "like grep but case sensitive Overrides grep")
 	rootCmd.Flags().StringVarP(&cliArgs.Vsensitive, "vgrep-case", "V", "", "like vgrep but case sensitive. Overrides vgrep")
+	rootCmd.Flags().StringVarP(&cliArgs.Trim, "trim", "t", "", "remove prefix from each path in the results")
 	rootCmd.Flags().StringVar(&cliArgs.Host, "host", "", "address for a remote census instance to use instead of local")
 
 }

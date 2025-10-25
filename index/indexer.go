@@ -3,9 +3,7 @@ package index
 import (
 	"census/types"
 	"crypto/md5"
-	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -15,8 +13,6 @@ import (
 	"syscall"
 	"time"
 )
-
-var mimeJson = "extToMime.json"
 
 type File struct {
 	Id        string
@@ -38,7 +34,7 @@ func Query(args *types.Command) (string, error) {
 		}
 	}
 
-	memIndex := NewMemIndex(args.Paths, args.IgnorePaths, args.ShowHidden, args.Depth, args.EscapeChars, args.Quote)
+	memIndex := NewMemIndex(args.Paths, args.IgnorePaths, args.ShowHidden, args.Depth, args.EscapeChars, args.Quote, args.Trim)
 	Walk(args.Paths, &memIndex.Root, &memIndex.Current, memIndex.Add)
 
 	var allPaths []string
@@ -64,34 +60,11 @@ func Query(args *types.Command) (string, error) {
 	return fmt.Sprint(strings.Join(allPaths, "\n")), nil
 }
 
-func loadMimes() map[string]string {
-	mimes := make(map[string]string)
-	f, err := os.Open(mimeJson)
-	if err != nil {
-		return mimes
-	}
-	defer f.Close()
-	mimeBytes, _ := io.ReadAll(f)
-	json.Unmarshal(mimeBytes, &mimes)
-	return mimes
-}
-
 func hash(s string) string {
 	return string(md5.New().Sum([]byte(s)))
 }
 
-func mimeFromExt(s string, m map[string]string) string {
-	if s == "" {
-		return ""
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return m[parts[len(parts)-1]]
-}
-
-func NewMemIndex(paths []string, ignore []string, showHidden bool, depth int, escapeChars string, quote bool) *MemIndex {
+func NewMemIndex(paths []string, ignore []string, showHidden bool, depth int, escapeChars string, quote bool, trimPrefix string) *MemIndex {
 	index := &MemIndex{
 		Files:          make(map[string]*File),
 		Dirs:           make(map[string]bool),
@@ -103,6 +76,11 @@ func NewMemIndex(paths []string, ignore []string, showHidden bool, depth int, es
 		quote:          quote,
 		escapeCharsMap: make(map[rune]bool),
 	}
+	if trimPrefix != "" {
+		pfx := index.escapeString(trimPrefix)
+		index.trimPrefix = pfx
+	}
+
 	for _, c := range escapeChars {
 		index.escapeCharsMap[c] = true
 	}
@@ -121,6 +99,7 @@ type MemIndex struct {
 	quote          bool
 	escapeChars    string
 	escapeCharsMap map[rune]bool
+	trimPrefix     string
 }
 
 // Adds a new `File` entry to the index
@@ -193,30 +172,37 @@ func (i *MemIndex) Move(from string, to string) error {
 	return nil
 }
 
-func (i *MemIndex) escapeAndQuote(line string) string {
-	newLine := ""
-	if len(i.escapeCharsMap) > 0 {
-		for _, c := range line {
-			if i.escapeCharsMap[c] {
-				newLine = fmt.Sprintf("%s\\%c", newLine, c)
-			} else {
-				newLine = fmt.Sprintf("%s%c", newLine, c)
-			}
+func (i *MemIndex) escapeString(line string) string {
+	if len(i.escapeCharsMap) == 0 {
+		return line
+	}
+	for _, c := range line {
+		if i.escapeCharsMap[c] {
+			line = fmt.Sprintf("%s\\%c", line, c)
+		} else {
+			line = fmt.Sprintf("%s%c", line, c)
 		}
-	} else {
-		newLine = line
+	}
+	return line
+}
+
+func (i *MemIndex) formatPath(p string) string {
+	escapedPath := i.escapeString(p)
+	if i.trimPrefix != "" {
+		escapedPath = strings.TrimPrefix(escapedPath, i.trimPrefix)
 	}
 	if i.quote {
 		// use this syntax instead of "%q" to prevent double escaping of spaces
-		return fmt.Sprintf("\"%s\"", newLine)
+		escapedPath = fmt.Sprintf("\"%s\"", escapedPath)
 	}
-	return newLine
+	return escapedPath
+
 }
 
 func (i *MemIndex) GetFiles() []string {
 	paths := []string{}
 	for _, p := range i.Files {
-		paths = append(paths, i.escapeAndQuote(p.Name))
+		paths = append(paths, i.formatPath(p.Name))
 	}
 	return paths
 }
@@ -224,7 +210,7 @@ func (i *MemIndex) GetFiles() []string {
 func (i *MemIndex) GetDirs() []string {
 	dirs := []string{}
 	for p := range i.Dirs {
-		dirs = append(dirs, i.escapeAndQuote(p))
+		dirs = append(dirs, i.formatPath(p))
 	}
 	return dirs
 }

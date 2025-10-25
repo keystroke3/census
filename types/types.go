@@ -14,6 +14,7 @@ type Command struct {
 	StopServer  bool
 	EscapeChars string
 	Quote       bool
+	Trim        string
 }
 
 type RunArgs struct {
