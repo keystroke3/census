@@ -96,6 +96,16 @@ $ census -p /animals/cats  -p /pics/cars/ford
 /pics/animals/cats/playful-calico.png
 ```
 
+#### Piping
+You can also use the output of another program as input to Census by piping into it. The paths must be separated by newline characters.
+This means you can have a file that contains a list of file paths and pass them directly into Census without the need of specifying each or
+using a bash variable.
+
+```bash
+$ long | pipe | chain | census
+$ cat my_file_with_paths | census
+```
+
 #### Hidden Items 
 
 By default items starting with a period '`.`' in their name are ignored unless they are explicitly included in the requested paths with `-p` parameter.
@@ -171,7 +181,10 @@ have any impact, so that has not been added as an option.
 If you have a particularly deep directory structure, and what you are looking for is relatively shallow, then it might be a good idea to limit the depth of search.
 Just like ignore, it will stop searching when it reaches a certain depth and therefor save a bunch of time.
 
-### Remoting
+#### Trim
+You can trim a prefix string from all returned file paths using the `-t` or `--trim` flag with some text to trim. If the line does not contain that prefix, it will not be touched.
+
+### Remote Server
 
 Suppose you have a Network Attached Storage (NAS) drive and you want to quickly fuzz out some of its contents. The simplest solution would
 be to mount the NAS drive somewhere using something like SAMBA or NFS, and then run census on the mount directory. This will work
