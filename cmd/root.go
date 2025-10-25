@@ -8,6 +8,8 @@ import (
 	"census/socket"
 	"census/types"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"strings"
 	"syscall"
@@ -33,15 +35,43 @@ func remotizeHomePaths(paths []string) ([]string, error) {
 	return clean_paths, nil
 }
 
+func readPipedPaths() []string {
+	f, err := os.Stdin.Stat()
+	if err != nil {
+		log.Fatalf("error reading from pipe %s", err)
+	}
+	if f.Mode()&os.ModeNamedPipe == 0 {
+		return nil
+	}
+	b, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		log.Fatalf("error reading from pipe %s", err)
+	}
+	paths := strings.Split(string(b), "\n")
+	cleanPaths := []string{}
+	for _, path := range paths {
+		if path != "" {
+			cleanPaths = append(cleanPaths, path)
+		}
+
+	}
+	return cleanPaths
+}
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "census",
 	Short: "A tool to index, search through and find your files",
-	Long: `Cencus takes census (get it?) of files in a specified directory or
+	Long: `Census takes census (get it?) of files in a specified directory or
 group of directories.`,
 	Args: cobra.ArbitraryArgs,
 	Run: func(cmd *cobra.Command, args []string) {
-		if !cmd.Flags().Changed("paths") || len(cliArgs.Paths) == 0 {
+		pipePaths := readPipedPaths()
+		fmt.Printf("paths: %s\n", pipePaths)
+		if pipePaths != nil {
+			cliArgs.Paths = pipePaths
+		}
+		if !cmd.Flags().Changed("paths") && len(cliArgs.Paths) == 0 {
 			var paths []string
 			if len(args) > 0 {
 				paths = args
@@ -80,7 +110,6 @@ func Execute() {
 		syscall.Exit(1)
 	}
 }
-
 func init() {
 	cliArgs = &types.Command{}
 	rootCmd.Flags().StringSliceVarP(&cliArgs.Paths, "paths", "p", nil, "path(s) to search through")
