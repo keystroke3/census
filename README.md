@@ -4,7 +4,7 @@ A small tool for recursively searching your directories for quick and easy fuzzy
 
 ## Setup
 The easiest way to install Census is to download the [latest release](https://github.com/keystroke3/Census/releases/latest) binary.
-You can then place the binary in directory that is in your system PATH, typically `/usr/bin`, `/usr/local/bin` or `~/.local/bin`.
+You can then place the binary in a directory that is in your system PATH, typically `/usr/bin`, `/usr/local/bin` or `~/.local/bin`.
 
 ```bash
 wget -O census https://github.com/keystroke3/Census/releases/download/<latest-version>census
@@ -12,25 +12,39 @@ chmod +x census
 ./census --help
 ```
 
-Alternatively, you can download the source code from the archive files in the releases, extract and build from source:
+---
 
+## Building
+
+Pre-built binaries are available for Linux (x86 and ARM) and macOS (x86 and ARM). Download the [latest release](https://github.com/keystroke3/Census/releases/latest) and place the binary in your PATH.
+
+### From source
+
+Requires Go 1.21+.
 
 ```bash
-mkdir census
-cd census
-wget https://github.com/keystroke3/Census/archive/refs/tags/<verion>.tar.gz
-tar -xzvf <version>.tar.gz
-cd Census-<version>
-go build . # add custom flags
+git clone https://github.com/keystroke3/Census
+cd Census
+make all
 ```
 
-In order for the build to work, you must have Golang and all the Golang tooling installed on your system.
+This builds four cross-compiled binaries into `bin/`:
+
+| Target | Output |
+|---|---|
+| `make linux-amd64` | `bin/census-linux-amd64` |
+| `make linux-arm64` | `bin/census-linux-arm64` |
+| `make darwin-arm64` | `bin/census-darwin-arm64` |
+| `make darwin-amd64` | `bin/census-darwin-amd64` |
+| `make platform` | `bin/census` (current machine) |
+| `make all` | builds all four cross-compiled binaries |
+| `make clean` | removes all `bin/census-*` binaries |
 
 ---
 
 **Tip**
 
-You might want to rename the binary to something shorter like fs or set up a shell alias so you have less typing to do
+You might want to rename the binary to something shorter like `fs` or set up a shell alias so you have less typing to do.
 
 ---
 
@@ -41,18 +55,38 @@ For a quick usage guide, just run:
 census --help
 ```
 
-census capabilities:
+ census capabilities:
  - List all the items in the current directory
  - List all the files in multiple given directories
  - Perform REGEX filters on the search results
- - Run as a TCP server
- - Remotely call another census instance over http
+ - Run as a TCP server via `census server`
+ - Remotely call another census instance over TCP
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `-p, --paths strings` | path(s) to search through (can be passed multiple times) |
+| `-i, --ignore strings` | paths to ignore when searching (can be passed multiple times) |
+| `-H, --hidden` | include hidden (dot) paths and files in search |
+| `-e, --escape string` | characters to prepend with a backslash to escape |
+| `-q, --quote` | wrap each line in double quotes |
+| `-d, --dir` | return directories only |
+| `-r, --relative` | trim the root search path out (removes leading `/`) |
+| `-D, --depth int` | how many nested directories to index (default -1) |
+| `-g, --grep string` | show paths matching regex pattern (case-insensitive) |
+| `-G, --grep-case string` | like `--grep` but case-sensitive (overrides `-g`) |
+| `-v, --vgrep string` | exclude paths matching regex pattern (case-insensitive) |
+| `-V, --vgrep-case string` | like `--vgrep` but case-sensitive (overrides `-v`) |
+| `-t, --trim stringArray` | remove prefix from each path in the results (can be passed multiple times) |
+| `--host string` | address for a remote census instance |
+| `server` | run as a TCP server (see Server subcommand) |
 
 ### Listing
 
 #### Simple
-The main thing that census does is list items, so it is pretty easy to do that. If you want to list all the items in the 
-current working directory, call census with no arguments. The paths will be listed in full from the root `-p` path
+The main thing that census does is list items, so it is pretty easy to do that. If you want to list all the items in the
+current working directory, call census with no arguments. The paths will be listed in full from the root `-p` path.
 If for example we are in the directory `/pics`:
 
 ```bash
@@ -73,7 +107,7 @@ $ census
 /pics/animals/dogs/poodle-puppy.png
 ```
 
-By default, only the files are shown. If you wish to show directories instead, use the `-d` flag::
+By default, only the files are shown. If you wish to show directories instead, use the `-d` flag:
 
 ```bash
 $ census -p /pics -d
@@ -83,7 +117,31 @@ $ census -p /pics -d
 /pics/animals/dogs
 ```
 
-####  Multi-directory listing
+#### Relative paths
+
+The `-r` flag trims the root search path from the output, giving relative paths:
+
+```bash
+$ census -p /pics -r
+cars/ford/blue-mustang.png
+cars/ford/red-fiesta.png
+```
+
+When combined with `-t`, the leading `/` is preserved if the trim argument does not end with a path separator, and stripped if it does:
+
+```bash
+# Leading / kept (no trailing separator in trim argument)
+$ census -p /pics -t /pics
+/pics/cars/ford/blue-mustang.png
+
+# Leading / stripped (trailing separator in trim argument)
+$ census -p /pics -t /pics/
+cars/ford/blue-mustang.png
+```
+
+Multiple `-t` arguments are evaluated per-path: the last matching trim prefix determines whether the leading `/` is stripped.
+
+#### Multi-directory listing
 
 If you want to list items in more directories, you can use the `-p` or `--path` parameter for each directory you wish to add.
 In the `/pics` example, you can specify
@@ -102,17 +160,15 @@ This means you can have a file that contains a list of file paths and pass them 
 using a bash variable.
 
 ```bash
-$ long | pipe | chain | census
-$ cat my_file_with_paths | census
+$ long \| pipe \| chain \| census
+$ cat my_file_with_paths \| census
 ```
 
-#### Hidden Items 
+#### Hidden Items
 
-By default items starting with a period '`.`' in their name are ignored unless they are explicitly included in the requested paths with `-p` parameter.
-If you want them to be indexed, you can use the `-H` or `--hidden` flag. Please note that it is more performant to explicitly provide the specific
-directory you wish to be included rather than enabling all the hidden directories. Especially if you have a slow drive.
+By default, items starting with a period (`.`) are ignored. Hidden **files** are filtered at the file level, and hidden **directories** are skipped entirely (their contents are never walked). Dot paths explicitly included with `-p` are still indexed.
 
-Example:
+To also index directories whose names start with a dot, use the `-H` or `--hidden` flag:
 
 ```bash
 $ census -p .homework
@@ -123,9 +179,9 @@ $ census -p .homework
 .homework/to.png
 .homework/see.png
 .homework/here.png
-
 ```
-In this example, the extra `/pics/.homework/.secret` will not be shown.
+
+Note that dot directories nested inside visible directories (e.g. `/pics/work/.obsidian`) are always skipped unless `-H` is used.
 
 ### Filtering
 
@@ -182,30 +238,53 @@ If you have a particularly deep directory structure, and what you are looking fo
 Just like ignore, it will stop searching when it reaches a certain depth and therefor save a bunch of time.
 
 #### Trim
-You can trim a prefix string from all returned file paths using the `-t` or `--trim` flag with some text to trim. If the line does not contain that prefix, it will not be touched.
 
-### Remote Server
+You can trim a prefix string from all returned file paths using the `-t` or `--trim` flag. The trim argument can be passed multiple times, and each is evaluated per-path: the last matching prefix determines the output.
+
+```bash
+$ census -p /pics -t /pics
+/pics/cars/ford/blue-mustang.png
+```
+
+When the trim argument ends with a path separator (e.g. `-t /pics/`), the leading `/` is stripped from the output:
+
+```bash
+$ census -p /pics -t /pics/
+pics/cars/ford/blue-mustang.png
+```
+
+The `-r` flag always strips the leading `/` from output, regardless of whether the trim argument has a trailing separator. When `-r` is combined with a non-trailing trim argument, `-r` is resolved first (base path), then `-t` is applied:
+
+```bash
+$ census -p /pics -r
+cars/ford/blue-mustang.png
+
+$ census -p /pics -t /pics -r
+pics/cars/ford/blue-mustang.png
+```
+
+### Server
 
 Suppose you have a Network Attached Storage (NAS) drive and you want to quickly fuzz out some of its contents. The simplest solution would
 be to mount the NAS drive somewhere using something like SAMBA or NFS, and then run census on the mount directory. This will work
 but it will be very slow and inefficient. Also, if you for some reason don't want to or can't mount the directory in question, then this might not
 work for you. 
 
-This is where the census `--serve` or `-s` parameter comes in handy. When the `--serve` parameter is passed with an addres `addr`, a new TCP listener will be started
+This is where the census `server` subcommand comes in handy. When the `--run` flag is passed with an address `addr`, a new TCP listener will be started
 and listen at the specified host and port. You can provide a full address like `127.0.0.1:8080` or just specify the port `:8080` and it will be assumed to be listening on localhost.
 If the port is being used, then the connection will fail and the listener will not be started.
 
 ```bash
-$ census --serve ':8888' 
+$ census server --run --address ':8888' 
 ```
 
-Once the server is running, you can make requests to it using `--host` parameter. Everything runs just as on local machine, but all the flags and parameters are sent out to the
+Once the server is running, you can make requests to it using `--host` flag. Everything runs just as on local machine, but all the flags and parameters are sent out to the
 remote census instance where they are executed and the results are returned.
 
 You can run the TCP server in the background like this:
 
 ```bash
-$ census --serve ':8888' &> /tmp/census.log & disown
+$ census server --run --address ':8888' &> /tmp/census.log & disown
 ```
 
 For a more convenient way to run it, you can define a systemd service in `/etc/systemd/system/census.service` like so:
@@ -216,12 +295,12 @@ Description='census TCP server'
 
 [Service]
 User=<your_user>
-ExecStart=/path/to/census -s '<ip>:<port>'
+ExecStart=/path/to/census server --run --address '<ip>:<port>'
 
 [Install]
 WantedBy=multi-user.target
 ```
-Don't for get to restart systemd daemon and enable the newly created census service so it starts at boot:
+Don't forget to restart systemd daemon and enable the newly created census service so it starts at boot:
 
 ```bash
 $ sudo systemctl daemon-reload
@@ -247,26 +326,31 @@ If you wish to send the requests directly using outside tools like curl or use i
 
 ```go
 struct {
-	Depth       int // required (-1 for infinite)
-	DirMode     bool // false
-	Grep        string // ""
-	IgnorePaths []string // []
-	Paths       []string // required
-	ShowHidden  bool // false
-	Vgrep       string // ""
+	Depth       int        // required (-1 for infinite)
+	DirMode     bool       // false
+	Grep        string     // ""
+	Gsensitive  string     // ""
+	Host        string     // ""
+	IgnorePaths []string   // []
+	Paths       []string   // required
+	Relative    bool       // false
+	ShowHidden  bool       // false
+	StopServer  bool       // false
+	Trim        []string   // []
+	Vgrep       string     // ""
+	Vsensitive  string     // ""
 }
-
 ```
 
 Any flags or parameters not set or desired can be left out and the default values will be used.
 The exception is the `Paths` and `Depth` parameters which must be provided when using external tools.  
-here is an example using curl:
+Here is an example using curl:
 
 ```bash
 curl telnet://zen:10002 <<< '{"Depth":-1,"DirMode":false,"IgnorePaths":["services"],"Paths":["/media"]}'
 ```
 `/etc/hosts` entry for `zen` has been mapped to `10.0.0.2` where census server is running.
-This will also work if you have ssh hostnames defined in `~/.ssh/config`. In my case, the same machine is has the identity `zenith` in ssh config:
+This will also work if you have ssh hostnames defined in `~/.ssh/config`. In my case, the same machine has the identity `zenith` in ssh config:
 
 ```bash
 curl telnet://zenith:10002 <<< '{"Depth":-1,"DirMode":false,"IgnorePaths":["services"],"Paths":["/media"]}'

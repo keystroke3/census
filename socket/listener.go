@@ -1,3 +1,7 @@
+// Package socket provides network communication capabilities for the census daemon.
+// It handles TCP and Unix socket listeners, message handling, and remote query
+// execution. The package supports both server-side listening (via TCPListen and
+// UnixListen) and client-side communication (via RemoteQuery and dialCommand).
 package socket
 
 import (
@@ -12,6 +16,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -102,7 +107,7 @@ func handleMessage(conn net.Conn) {
 		conn.Write(respb)
 		return
 	}
-	result, err := index.Query(cmd)
+	result, err := index.Query(cmd, nil)
 	if err != nil {
 		resp.Error = err.Error()
 	} else {
@@ -113,21 +118,32 @@ func handleMessage(conn net.Conn) {
 }
 
 func localizeHomePaths(args *types.Command) error {
-	clean_paths := []string{}
+	cleanPaths := []string{}
 	for _, path := range args.Paths {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("unable to determine local home directory")
 		}
-		if strings.HasPrefix(path, "~") {
-			clean_paths = append(clean_paths, strings.Replace(path, "~", home, 1))
+		if strings.HasPrefix(path, "~"+string(os.PathSeparator)) {
+			cleanPaths = append(cleanPaths, filepath.Join(home, path[2:]))
+		} else if path == "~" {
+			cleanPaths = append(cleanPaths, home)
 		} else {
-			clean_paths = append(clean_paths, path)
+			cleanPaths = append(cleanPaths, path)
 		}
 	}
-	args.Paths = clean_paths
+	args.Paths = cleanPaths
+	home, err := os.UserHomeDir()
+	if err == nil {
+		for i, pfx := range args.Trim {
+			if strings.HasPrefix(pfx, "~"+string(os.PathSeparator)) {
+				args.Trim[i] = filepath.Join(home, pfx[2:])
+			} else if pfx == "~" {
+				args.Trim[i] = home
+			}
+		}
+	}
 	return nil
-
 }
 
 func dialCommand(cmnd *types.Command, protocol ...string) (*types.NetResponse, error) {
@@ -148,6 +164,9 @@ func dialCommand(cmnd *types.Command, protocol ...string) (*types.NetResponse, e
 	}
 	conn.Write(msg)
 	resp, err := io.ReadAll(conn)
+	if err != nil {
+		return nil, err
+	}
 	var results types.NetResponse
 	err = json.Unmarshal(resp, &results)
 	if err != nil {
@@ -202,11 +221,11 @@ func checkSocketConflict(file string) {
 		log.Fatal("unable to check for daemon conflicts, ", err)
 	}
 	conn, err := net.Dial("unix", file)
-	defer conn.Close()
 	if err != nil {
 		os.Remove(file)
 		return
 	}
+	defer conn.Close()
 	fmt.Println("another census is already running")
 	syscall.Exit(1)
 

@@ -1,3 +1,4 @@
+// Package types stores the models used across the application
 package types
 
 type Command struct {
@@ -14,7 +15,8 @@ type Command struct {
 	StopServer  bool
 	EscapeChars string
 	Quote       bool
-	Trim        string
+	Trim        []string
+	Relative    bool
 }
 
 type RunArgs struct {

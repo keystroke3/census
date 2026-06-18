@@ -1,6 +1,5 @@
-/*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-*/
+// Package cmd provides handles and parses user comandline arguments and invokes the relevant
+// functions.
 package cmd
 
 import (
@@ -11,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -24,23 +24,23 @@ func remotizePath(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("unable to determine local home directory")
 	}
-	if strings.HasPrefix(path, home) {
-		return strings.Replace(path, home, "~", 1), nil
-	} else {
+	rel, err := filepath.Rel(home, path)
+	if err != nil {
 		return path, nil
 	}
+	return filepath.Join("~", rel), nil
 }
 
 func remotizeHomePaths(paths []string) ([]string, error) {
-	clean_paths := []string{}
+	cleanPaths := []string{}
 	for _, path := range paths {
 		p, err := remotizePath(path)
 		if err != nil {
 			return nil, err
 		}
-		clean_paths = append(clean_paths, p)
+		cleanPaths = append(cleanPaths, p)
 	}
-	return clean_paths, nil
+	return cleanPaths, nil
 }
 
 func readPipedPaths() []string {
@@ -92,24 +92,28 @@ group of directories.`,
 			cliArgs.Paths = paths
 		}
 		if cmd.Flags().Changed("host") && cliArgs.Host != "" {
-			net_paths, err := remotizeHomePaths(cliArgs.Paths)
+			netPaths, err := remotizeHomePaths(cliArgs.Paths)
 			if err != nil {
 				fmt.Println("error translating paths", err)
 				return
 			}
-			if cmd.Flags().Changed("trim") && cliArgs.Trim != "" {
-				p, err := remotizePath(cliArgs.Trim)
-				if err != nil {
-					fmt.Println("error parsing trim prefix", err)
+			if cmd.Flags().Changed("trim") && len(cliArgs.Trim) > 0 {
+				remotePaths := make([]string, len(cliArgs.Trim))
+				for i, path := range cliArgs.Trim {
+					p, err := remotizePath(path)
+					if err != nil {
+						fmt.Println("error parsing trim prefix", err)
+					}
+					remotePaths[i] = p
 				}
-				cliArgs.Trim = p
+				cliArgs.Trim = remotePaths
 			}
-			cliArgs.Paths = net_paths
+			cliArgs.Paths = netPaths
 			results := socket.RemoteQuery(cliArgs)
 			fmt.Println(results)
 			return
 		}
-		results, err := index.Query(cliArgs)
+		results, err := index.Query(cliArgs, nil)
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -132,12 +136,13 @@ func init() {
 	rootCmd.Flags().StringVarP(&cliArgs.EscapeChars, "escape", "e", "", "characters to prepend with a backslash to escape them")
 	rootCmd.Flags().BoolVarP(&cliArgs.Quote, "quote", "q", false, "whether wrap each line in double quotes")
 	rootCmd.Flags().BoolVarP(&cliArgs.DirMode, "dir", "d", false, "return directories only")
+	rootCmd.Flags().BoolVarP(&cliArgs.Relative, "relative", "r", false, "trim the root search path out")
 	rootCmd.Flags().IntVarP(&cliArgs.Depth, "depth", "D", -1, "How many nested directories to index")
 	rootCmd.Flags().StringVarP(&cliArgs.Grep, "grep", "g", "", "show path files matches that match regex pattern")
 	rootCmd.Flags().StringVarP(&cliArgs.Vgrep, "vgrep", "v", "", "excludes paths match that match regex pattern")
 	rootCmd.Flags().StringVarP(&cliArgs.Gsensitive, "grep-case", "G", "", "like grep but case sensitive Overrides grep")
 	rootCmd.Flags().StringVarP(&cliArgs.Vsensitive, "vgrep-case", "V", "", "like vgrep but case sensitive. Overrides vgrep")
-	rootCmd.Flags().StringVarP(&cliArgs.Trim, "trim", "t", "", "remove prefix from each path in the results")
+	rootCmd.Flags().StringArrayVarP(&cliArgs.Trim, "trim", "t", nil, "remove prefix from each path in the results")
 	rootCmd.Flags().StringVar(&cliArgs.Host, "host", "", "address for a remote census instance to use instead of local")
 
 }

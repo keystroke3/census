@@ -1,40 +1,115 @@
+// Package index takes finds all the files in the provided directories
 package index
 
 import (
 	"census/types"
-	"crypto/md5"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"syscall"
-	"time"
 )
 
 type File struct {
-	Id        string
 	Name      string
 	Directory string
-	MimeType  string
-	Size      int64
-	Modified  time.Time
 }
 
-func Query(args *types.Command) (string, error) {
+type FormatArgs struct {
+	EscapeChars   map[rune]bool
+	TrimPrefixes  []string
+	ApplyQuote    bool
+	Relative      bool
+}
+
+func NewMemIndex(args *types.Command) *MemIndex {
+	index := &MemIndex{
+		Files:       make(map[string]*File),
+		Dirs:        make(map[string]bool),
+		paths:       args.Paths,
+		ignore:      args.IgnorePaths,
+		showHidden:  args.ShowHidden,
+		depth:       args.Depth,
+		escapeChars: args.EscapeChars,
+		quote:       args.Quote,
+	}
+
+	return index
+}
+
+func NewFormatArgs(args *types.Command) *FormatArgs {
+	fArgs := &FormatArgs{
+		EscapeChars:  map[rune]bool{},
+		TrimPrefixes: []string{},
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Println("unable to determine user's home directory")
+		os.Exit(1)
+	}
+	sep := string(os.PathSeparator)
+
+	if args.Relative {
+		fArgs.Relative = true
+		for _, p := range args.Paths {
+			var resolved string
+			if strings.HasPrefix(p, "~"+sep) {
+				resolved = filepath.Join(home, p[2:])
+			} else if p == "~" {
+				resolved = home
+			} else {
+				resolved = p
+			}
+			if strings.HasSuffix(p, sep) {
+				resolved += sep
+			}
+			fArgs.TrimPrefixes = append(fArgs.TrimPrefixes, resolved)
+		}
+	}
+	for _, pfx := range args.Trim {
+		var resolved string
+		if strings.HasPrefix(pfx, "~"+sep) {
+			resolved = filepath.Join(home, pfx[2:])
+		} else if pfx == "~" {
+			resolved = home
+		} else {
+			resolved = pfx
+		}
+		if strings.HasSuffix(pfx, sep) {
+			resolved += sep
+		}
+		fArgs.TrimPrefixes = append(fArgs.TrimPrefixes, resolved)
+	}
+	if len(args.EscapeChars) > 0 {
+		for _, c := range args.EscapeChars {
+			fArgs.EscapeChars[c] = true
+		}
+	}
+	fArgs.ApplyQuote = args.Quote
+	return fArgs
+}
+
+func Query(args *types.Command, memIndex *MemIndex) (string, error) {
 	for _, path := range args.Paths {
 		_, err := os.Stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return "", fmt.Errorf("path not found '%v'\n", path)
+				return "", fmt.Errorf("path not found '%v'", path)
 			}
 			return "", err
 		}
 	}
 
-	memIndex := NewMemIndex(args.Paths, args.IgnorePaths, args.ShowHidden, args.Depth, args.EscapeChars, args.Quote, args.Trim)
+	if memIndex == nil {
+		memIndex = NewMemIndex(args)
+	}
+
 	Walk(args.Paths, &memIndex.Root, &memIndex.Current, memIndex.Add)
 
 	var allPaths []string
@@ -43,67 +118,96 @@ func Query(args *types.Command) (string, error) {
 	} else {
 		allPaths = memIndex.GetFiles()
 	}
-	sensitive := true
-	inclusive := true
+	formatArgs := NewFormatArgs(args)
+	var filters []Filter
 	if args.Vgrep != "" {
-		allPaths = Some(allPaths, args.Vgrep, !sensitive, !inclusive)
+		re, err := regexp.Compile(strings.ToLower(args.Vgrep))
+		if err != nil {
+			fmt.Printf("could not compile regular expression '%s': %s", args.Vgrep, err.Error())
+		}
+		filters = append(filters, Filter{
+			Exp:       re,
+			Sensitive: false,
+			Inclusive: false,
+		})
 	}
 	if args.Vsensitive != "" {
-		allPaths = Some(allPaths, args.Vgrep, sensitive, !inclusive)
+		re, err := regexp.Compile(args.Vsensitive)
+		if err != nil {
+			fmt.Printf("could not compile regular expression '%s': %s", args.Vsensitive, err.Error())
+		}
+		filters = append(filters, Filter{
+			Exp:       re,
+			Sensitive: true,
+			Inclusive: false,
+		})
 	}
 	if args.Grep != "" {
-		allPaths = Some(allPaths, args.Grep, !sensitive, inclusive)
+		re, err := regexp.Compile(strings.ToLower(args.Grep))
+		if err != nil {
+			fmt.Printf("could not compile regular expression '%s': %s", args.Grep, err.Error())
+		}
+		filters = append(filters, Filter{
+			Exp:       re,
+			Sensitive: false,
+			Inclusive: true,
+		})
 	}
 	if args.Gsensitive != "" {
-		allPaths = Some(allPaths, args.Grep, sensitive, inclusive)
+		re, err := regexp.Compile(args.Gsensitive)
+		if err != nil {
+			fmt.Printf("could not compile regular expression '%s': %s", args.Gsensitive, err.Error())
+		}
+		filters = append(filters, Filter{
+			Exp:       re,
+			Sensitive: true,
+			Inclusive: true,
+		})
 	}
+	allPaths = FilterPaths(allPaths, filters, formatArgs)
 	return fmt.Sprint(strings.Join(allPaths, "\n")), nil
 }
 
-func hash(s string) string {
-	return string(md5.New().Sum([]byte(s)))
-}
-
-func NewMemIndex(paths []string, ignore []string, showHidden bool, depth int, escapeChars string, quote bool, trimPrefix string) *MemIndex {
-	index := &MemIndex{
-		Files:          make(map[string]*File),
-		Dirs:           make(map[string]bool),
-		paths:          paths,
-		ignore:         ignore,
-		showHidden:     showHidden,
-		depth:          depth,
-		escapeChars:    escapeChars,
-		quote:          quote,
-		escapeCharsMap: make(map[rune]bool),
-	}
-	if trimPrefix != "" {
-		pfx := index.escapeString(trimPrefix)
-		index.trimPrefix = pfx
-	}
-
-	for _, c := range escapeChars {
-		index.escapeCharsMap[c] = true
-	}
-	return index
-}
-
 type MemIndex struct {
-	Files          map[string]*File
-	Dirs           map[string]bool
-	Current        string
-	Root           string
-	paths          []string
-	ignore         []string
-	showHidden     bool
-	depth          int
-	quote          bool
-	escapeChars    string
-	escapeCharsMap map[rune]bool
-	trimPrefix     string
+	Files       map[string]*File
+	Dirs        map[string]bool
+	Current     string
+	Root        string
+	paths       []string
+	ignore      []string
+	showHidden  bool
+	depth       int
+	quote       bool
+	escapeChars string
 }
 
-// Adds a new `File` entry to the index
+func (i *MemIndex) Poll(interval int) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	quit := false
+	go func() {
+		sig := <-c
+		if sig != nil {
+			slog.Info("stop polling")
+			quit = true
+			return
+		}
+	}()
+
+	for {
+		if quit {
+			return
+		}
+
+	}
+}
+
+// Add puts a new `File` entry to the index
 func (i *MemIndex) Add(path string, f fs.DirEntry, err error) error {
+	if err != nil {
+		return err
+	}
 	if path == "." {
 		return nil
 	}
@@ -126,7 +230,7 @@ func (i *MemIndex) Add(path string, f fs.DirEntry, err error) error {
 		if slices.Contains(i.ignore, leaf) {
 			return fs.SkipDir
 		}
-		if !i.showHidden && strings.HasPrefix(path, ".") {
+		if !i.showHidden && strings.HasPrefix(leaf, ".") {
 			return fs.SkipDir
 		}
 		i.Dirs[fullPath] = true
@@ -135,74 +239,65 @@ func (i *MemIndex) Add(path string, f fs.DirEntry, err error) error {
 	if !i.showHidden && strings.HasPrefix(stat.Name(), ".") {
 		return nil
 	}
-	id := hash(fullPath)
 	file := File{
-		Id:        id,
 		Name:      fullPath,
 		Directory: filepath.Dir(path),
-		Size:      stat.Size(),
-		// MimeType:  mimeFromExt(stat.Name(), Mimes),
-		Modified: stat.ModTime(),
 	}
 
-	i.Files[id] = &file
+	i.Files[fullPath] = &file
 	return nil
 }
 
-func (i *MemIndex) Remove(path string) error {
-	delete(i.Files, hash(path))
-	return nil
-}
-
-// Relocates a file form one directory to another
-// In practice it just changes the directory value in the file
-func (i *MemIndex) Move(from string, to string) error {
-	f, set := i.Files[hash(from)]
-	if !set {
-		return fmt.Errorf("path %v not found in index", from)
-	}
-	_, err := os.Stat(to)
-	if err != nil {
-		return err
-	}
-	f.Id = hash(to)
-	f.Directory = to
-	i.Remove(from)
-	i.Files[f.Id] = f
-	return nil
-}
-
-func (i *MemIndex) escapeString(line string) string {
-	if len(i.escapeCharsMap) == 0 {
-		return line
-	}
-	for _, c := range line {
-		if i.escapeCharsMap[c] {
-			line = fmt.Sprintf("%s\\%c", line, c)
-		} else {
-			line = fmt.Sprintf("%s%c", line, c)
+// FormatPath applies transformations on a that were passed as arguments.
+// It removes leading separators from a relative path so it is not
+// confused as a root path.
+// Leading separators are removed when the trim argument has a trailing separator.
+//
+// E.g. -p '~/foo/bar/baz' -t '~/foo/'
+//
+// becomes
+//
+// bar/baz
+//
+// and -t '~/foo'
+//
+// becomes
+//
+// '/bar/baz'
+func FormatPath(args *FormatArgs, p string) string {
+	path := p
+	lastSep := false
+	for _, prefix := range args.TrimPrefixes {
+		if after, ok := strings.CutPrefix(path, prefix); ok {
+			path = after
+			lastSep = strings.HasSuffix(prefix, string(os.PathSeparator))
 		}
 	}
-	return line
-}
-
-func (i *MemIndex) formatPath(p string) string {
-	escapedPath := i.escapeString(p)
-	if i.trimPrefix != "" {
-		escapedPath = strings.TrimPrefix(escapedPath, i.trimPrefix)
+	if args.Relative || lastSep {
+		for len(path) > 0 && path[0] == os.PathSeparator {
+			path = path[1:]
+		}
 	}
-	if i.quote {
+	if args.ApplyQuote {
 		// use this syntax instead of "%q" to prevent double escaping of spaces
-		escapedPath = fmt.Sprintf("\"%s\"", escapedPath)
+		path = fmt.Sprintf("\"%s\"", path)
 	}
-	return escapedPath
-
+	if len(args.EscapeChars) > 0 {
+		for _, c := range path {
+			if args.EscapeChars[c] {
+				path = fmt.Sprintf("%s\\%c", path, c)
+			} else {
+				path = fmt.Sprintf("%s%c", path, c)
+			}
+		}
+	}
+	return path
 }
 
 func (i *MemIndex) GetFiles() []string {
 	paths := []string{}
 	for _, p := range i.Files {
-		paths = append(paths, i.formatPath(p.Name))
+		paths = append(paths, p.Name)
 	}
 	return paths
 }
@@ -210,50 +305,37 @@ func (i *MemIndex) GetFiles() []string {
 func (i *MemIndex) GetDirs() []string {
 	dirs := []string{}
 	for p := range i.Dirs {
-		dirs = append(dirs, i.formatPath(p))
+		dirs = append(dirs, p)
 	}
 	return dirs
 }
 
-// Returns only the []string values that contain substring v
-//
-// if optional `inclusive = false`, then the match is reversed
-func Some(s []string, v string, sensitive bool, inclusive bool) []string {
-	var re *regexp.Regexp
-	var err error
-	if !sensitive {
-		re, err = regexp.Compile(strings.ToLower(v))
-	} else {
-		re, err = regexp.Compile(v)
-	}
+type Filter struct {
+	Exp       *regexp.Regexp
+	Sensitive bool
+	Inclusive bool
+}
 
-	if err != nil {
-		fmt.Printf("unable to read regex: '%v', %v\n", v, err)
-		syscall.Exit(1)
-	}
-
-	res := []string{}
-	if len(s) == 0 {
-		return res
-	}
-	if v == "" {
-		return s
-	}
-	for _, p := range s {
-		var match string
-		if !sensitive {
-			match = re.FindString(strings.ToLower(p))
-		} else {
-			match = re.FindString(p)
+// FilterPaths applies filters sequentially to paths, formatting matched results.
+func FilterPaths(paths []string, filters []Filter, format *FormatArgs) []string {
+	filtered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		survives := true
+		for _, f := range filters {
+			matched := f.Exp.MatchString(p)
+			if !f.Sensitive {
+				matched = f.Exp.MatchString(strings.ToLower(p))
+			}
+			if (f.Inclusive && !matched) || (!f.Inclusive && matched) {
+				survives = false
+				break
+			}
 		}
-		if match != "" && inclusive {
-			res = append(res, p)
-		}
-		if match == "" && !inclusive {
-			res = append(res, p)
+		if survives {
+			filtered = append(filtered, FormatPath(format, p))
 		}
 	}
-	return res
+	return filtered
 }
 
 func Walk(paths []string, root *string, current *string, fn func(path string, d fs.DirEntry, err error) error) {
